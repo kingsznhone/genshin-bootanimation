@@ -30,7 +30,12 @@ KernelSU / Magisk 模块。唯一脚本 `src/build.py`，产物 `build/genshin-b
 5. **一次只改一个变量。**
    之前同时改了布局、颜色类型、量化级数，结果三次失败无法归因，浪费了一轮。
 
-6. **模块 zip 用 deflate 9，绝对不要用 LZMA。**
+6. **开机音效有两个落点，别只放一个。**
+   OS3 及更早读 `system/media/bootaudio.mp3`（模块静态文件）；HyperOS 4 只认 MIUI 主题通道
+   `/data/system/theme/boots/bootaudio.mp3`，由 `post-fs-data.sh` 开机时铺、`uninstall.sh` md5 比对后删。
+   静态部分仍然只写 `system/media/`，不要为了音效去加 `product/`。
+
+7. **模块 zip 用 deflate 9，绝对不要用 LZMA。**
    LZMA 能再小 2%（8.13 MiB），但 ksud 解不开，实测报 `unzip: corrupted data / inflate error`，
    装机直接失败。deflate 9 是验证过能装的（8.32 MiB，比 stored 小 10%）。
    内层 `bootanimation.zip` 的帧必须继续保持 STORED，那是 Android 的硬性要求。
@@ -47,12 +52,25 @@ uv run python src/build.py 1080x2400 --silent     # 不带音频
 
 发布用的母版包：`uv run python src/build.py 1440x3200 -o build/genshin_bootanim-<code>-<version>.zip`
 
+## 实测事实（别再重新踩）
+
+- `/system/media` 是软链，指向 `/product/media`；原厂动画的物理文件是
+  `/product/media/bootanimation.zip`，`/system/media/bootanimation.zip` 只是同一个文件。
+- KSU 的 `post-fs-data.sh` 里 **`$MODPATH` 是空的**，脚本里要用绝对路径
+  `/data/adb/modules/<id>/`，或者 `${MODPATH:-/data/adb/modules/<id>}` 兜底。
+- 模块**不带** `system/media/bootanimation.zip` 时，可以在 `post-fs-data.sh` 里
+  `mount -o bind` 到 `/system/media/bootanimation.zip`（会落到 `/product/media/...`），
+  bootanimation 能读到，实测有效。
+- 模块**带了**静态 `system/media/bootanimation.zip` 时，KSU 会在模块挂载阶段（脚本之后）
+  再挂一次，压住脚本 bind 的那层——想动态替换就不要带静态文件。
+- bind 只对本次开机有效。
+
 ## 测试机
 
 - Xiaomi 2211133C（fuxi），Android 16，`wm size` = 1080x2400
+- Xiaomi 25113PN0EC（pudding），Android 17 / OS4.0，`wm size` = 1220x2656
 - KernelSU + Hybrid Mount（metamodule），overlay 模式下偶尔有 `overlayfs: failed to get metacopy (-13)`，
   这条在当前能正常显示的启动里也会出现，**不是**模块失败的证据
-- `/system/media` → `/product/media` 软链
 
 ## 协作约定
 

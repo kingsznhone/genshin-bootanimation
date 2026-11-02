@@ -10,8 +10,6 @@
 产物: build/genshin-bootamin.zip
 """
 
-from __future__ import annotations
-
 import argparse
 import hashlib
 import os
@@ -54,8 +52,6 @@ CUSTOMIZE = """#!/system/bin/sh
 ui_print "- 原神开机动画"
 ui_print "- 重启后生效"
 
-set_perm_recursive "$MODPATH/system/media" 0 0 0755 0644
-
 if command -v wm >/dev/null 2>&1; then
     REAL="$(wm size 2>/dev/null | tail -n 1 | sed 's/.*: *//')"
     if [ -n "$REAL" ] && [ "$REAL" != "__SIZE__" ]; then
@@ -63,6 +59,40 @@ if command -v wm >/dev/null 2>&1; then
     fi
 fi
 """
+
+# HyperOS 4 的开机铃声走 MIUI 主题通道，只认 /data/system/theme/boots/bootaudio.mp3，
+# system/media 下那份会被忽略；OS3 及更早则读 system/media。
+# KSU 执行 post-fs-data.sh 时不设 $MODPATH，路径必须写死。
+POST_FS_DATA = """#!/system/bin/sh
+MODDIR=/data/adb/modules/__ID__
+DST=/data/system/theme/boots/bootaudio.mp3
+SRC="$MODDIR/system/media/bootaudio.mp3"
+__ACTION__
+"""
+
+THEME_AUDIO_MD5 = "__MD5__"
+
+UNINSTALL = """#!/system/bin/sh
+# 只删我们自己放过去的那份，别误删用户的主题铃声
+DST=/data/system/theme/boots/bootaudio.mp3
+if [ -f "$DST" ] && [ "$(md5sum "$DST" 2>/dev/null | cut -d' ' -f1)" = "__MD5__" ]; then
+    rm -f "$DST"
+fi
+"""
+
+# 非静音：把音效铺到主题目录，OS4 才会在开机时播
+POST_FS_DATA_COPY = """if [ -f "$SRC" ]; then
+    mkdir -p "${DST%/*}"
+    cp -f "$SRC" "$DST"
+    chmod 644 "$DST"
+    chown 0:0 "$DST" 2>/dev/null
+    restorecon "$DST" 2>/dev/null
+fi"""
+
+# 静音：如果之前铺过我们的文件就删掉，避免装过非静音版后一直有声
+POST_FS_DATA_SILENT = """if [ -f "$DST" ] && [ "$(md5sum "$DST" 2>/dev/null | cut -d' ' -f1)" = "__MD5__" ]; then
+    rm -f "$DST"
+fi"""
 
 
 class BuildError(RuntimeError):
@@ -108,10 +138,12 @@ def render_frames(frames: list[Path], width: int, height: int, dest: Path) -> li
 # 打包
 
 
-def _write(zf: zipfile.ZipFile, name: str, data: bytes, compress: int = zipfile.ZIP_STORED) -> None:
+def _write(
+    zf: zipfile.ZipFile, name: str, data: bytes, compress: int = zipfile.ZIP_STORED, mode: int = 0o644
+) -> None:
     info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
     info.compress_type = compress
-    info.external_attr = 0o644 << 16
+    info.external_attr = (0o100000 | mode) << 16
     zf.writestr(info, data)
 
 
@@ -165,13 +197,25 @@ def write_module(width, height, inner, out_path, silent, fps):
 
     # deflate 9：比 stored 小约 10%。LZMA 还能再小 2%，但 ksud 解不开（unzip: inflate error）
     method = zipfile.ZIP_DEFLATED
+    mp3 = AUDIO_MP3.read_bytes()
+    md5 = hashlib.md5(mp3).hexdigest()
+    action = POST_FS_DATA_SILENT if silent else POST_FS_DATA_COPY
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out_path, "w", compression=method, compresslevel=9) as zf:
         _write(zf, "module.prop", module_prop.encode(), method)
-        _write(zf, "customize.sh", CUSTOMIZE.replace("__SIZE__", size).encode(), method)
+        _write(zf, "customize.sh", CUSTOMIZE.replace("__SIZE__", size).encode(), method, 0o755)
+        post = (
+            POST_FS_DATA.replace("__ID__", MODULE_ID)
+            .replace("__ACTION__", action)
+            .replace(THEME_AUDIO_MD5, md5)
+        )
+        _write(zf, "post-fs-data.sh", post.encode(), method, 0o755)
+        uninstall = UNINSTALL.replace(THEME_AUDIO_MD5, md5)
+        _write(zf, "uninstall.sh", uninstall.encode(), method, 0o755)
         _write(zf, "system/media/bootanimation.zip", inner.read_bytes(), method)
-        if not silent and AUDIO_MP3.exists():
-            _write(zf, "system/media/bootaudio.mp3", AUDIO_MP3.read_bytes(), method)
+        if not silent:
+            _write(zf, "system/media/bootaudio.mp3", mp3, method)
 
 
 # --------------------------------------------------------------------------- #

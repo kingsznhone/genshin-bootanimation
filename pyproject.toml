@@ -1,6 +1,6 @@
 [project]
 name = "genshin-bootanimation"
-version = "1.0.0"
+version = "1.0.1"
 description = "把原神启动画面构建成目标分辨率的 KernelSU / Magisk 启动动画模块"
 requires-python = ">=3.11"
 dependencies = ["pillow>=13"]
