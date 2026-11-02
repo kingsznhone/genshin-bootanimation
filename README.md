@@ -1,4 +1,4 @@
-# KernelSU原神开机动画模块
+# KernelSU 原神开机动画模块
 
 1440p 母版 → 目标分辨率的 KernelSU / Magisk 模块，
 
@@ -77,3 +77,8 @@ metamodule 时，`/product` 的 overlay 可能挂不上（dmesg 里是 `overlayf
 （MIUI / HyperOS 系统级播放）。不想要声音加 `--silent`。
 
 目标分辨率的宽高比最好接近母版的 9:20，差得越多裁得越多。
+
+
+## 已知bug
+
+当手机里存在上百万QQ微信拉出来的文件，启动第一屏的SElinux扫盘会导致音频组件初始化超时，播放动画的时候没有声音
