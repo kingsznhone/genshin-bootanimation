@@ -1,5 +1,7 @@
 # KernelSU 原神开机动画模块
 
+<img src="assets/startup.jpg" width="500" alt="预览">
+
 1440p 母版 → 目标分辨率的 KernelSU / Magisk 模块，
 
 在小米13 小米17上测试通过
@@ -81,4 +83,4 @@ metamodule 时，`/product` 的 overlay 可能挂不上（dmesg 里是 `overlayf
 
 ## 已知bug
 
-当手机里存在上百万QQ微信拉出来的文件，启动第一屏的SElinux扫盘会导致音频组件初始化超时，播放动画的时候没有声音。建议清理一下手机里的垃圾
+当手机里存在上百万QQ微信拉出来的文件，启动第一屏的SElinux扫盘会导致音频组件初始化超时，播放动画的时候没有声音。建议清理一下手机里的垃圾。
