@@ -1,0 +1,58 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      resolution:
+        description: "目标分辨率，如 1440x3200"
+        required: true
+        default: "1440x3200"
+      fps:
+        description: "帧率（1–30，母版是 30）"
+        required: false
+        default: "30"
+      silent:
+        description: "不带音频"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            uv-${{ runner.os }}-
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+
+      - name: Build
+        env:
+          RESOLUTION: ${{ inputs.resolution }}
+          FPS: ${{ inputs.fps }}
+          SILENT: ${{ inputs.silent }}
+        run: |
+          args="$RESOLUTION --fps $FPS -o build/genshin-bootamin.zip"
+          if [ "$SILENT" = "true" ]; then
+            args="$args --silent"
+          fi
+          uv sync --frozen
+          uv run python src/build.py $args
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: genshin-bootamin-${{ inputs.resolution }}-${{ inputs.fps }}fps
+          path: build/genshin-bootamin.zip
+          if-no-files-found: error

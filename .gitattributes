@@ -1,0 +1,13 @@
+# 统一换行，避免 Windows 提交把脚本改成 CRLF
+* text=auto eol=lf
+
+# 素材：体积大、二进制、不参与 diff
+assets/**/*.png filter=lfs diff=lfs merge=lfs -text
+assets/**/*.wav filter=lfs diff=lfs merge=lfs -text
+assets/**/*.mp3 filter=lfs diff=lfs merge=lfs -text
+
+# 产物
+*.zip -text
+
+# 图标要直接可读（不进 LFS），模块页会按 commit 取原文件
+assets/icon.png -filter -diff -merge -text

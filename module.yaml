@@ -1,0 +1,14 @@
+schemaVersion: 1
+id: genshin_bootanim
+name: 原神开机动画
+summary: 把开机动画换成原神启动画面
+description: README.md
+license: GPL-3.0-only
+homepage: https://github.com/kingsznhone/genshin-bootanimation
+support: https://github.com/kingsznhone/genshin-bootanimation/issues
+tags: [bootanimation, theme]
+icon: assets/icon.png
+kind: module
+authors:
+  - name: ZNH
+    url: https://github.com/kingsznhone

@@ -1,0 +1,10 @@
+# 产物与中间件
+build/
+pr/
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Premiere 工程与原始素材（本地归档，不入库）
+pr/
