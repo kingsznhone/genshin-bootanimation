@@ -5,6 +5,25 @@
 把 1440x3200 母版按手机分辨率打包成开机动画模块。小米 13（1080x2400 / HyperOS 3）、
 小米 17（1220x2656 / HyperOS 4）实测通过。
 
+## 前置要求：Hybrid Mount
+
+KernelSU 3.x 起自己不做挂载，模块的 `system/` 要靠 metamodule 挂上去。**没有 metamodule 就装不上**，
+`customize.sh` 会直接 `abort`。
+
+而且 `/system/media` 是 `/product/media` 的软链，只有能跟随软链的 magic mount 才能覆盖过去——
+实测只有 **Hybrid Mount** 可以，所以推荐用它。
+
+| 当前 metamodule | 结果 |
+| --- | --- |
+| 没装 / 被禁用（含软链断了） | 安装被拦，不会留下半装的模块 |
+| **Hybrid Mount** | 正常安装（推荐） |
+| meta-overlayfs 等其它实现 | 允许安装，但可能覆盖不到 `/product/media`，没效果就换 Hybrid Mount |
+
+正确顺序：装 Hybrid Mount → 重启 → 装本模块 → 重启。
+
+重启后确认挂上了没有：`stat -c %s /system/media/bootanimation.zip`，大小应该和
+`/data/adb/modules/genshin_bootanim/system/media/bootanimation.zip` 一致。
+
 ## 用法
 
 ```bash
@@ -14,7 +33,7 @@ uv run src/build.py 1080x2400              # 指定分辨率
 uv run src/build.py 1440x3200 --fps 24    # 降帧率减小体积
 ```
 
-装法：KernelSU → 模块 → 从本地安装 → 选 `build/genshin-bootamin.zip` → 重启。
+装法：KernelSU → 模块 → 从本地安装 → 选 `build/genshin-bootamin.zip` → 重启（Hybrid Mount 要先装好）。
 
 只支持 KernelSU（实测环境：KernelSU + Hybrid Mount），**不支持 Magisk**：模块 zip 不带
 `META-INF/` 安装脚本，开机脚本里的模块路径和挂载行为也只在 KernelSU 上验证过。
@@ -40,7 +59,7 @@ Fork → Actions → `build` → Run workflow，填 `resolution`（`adb shell wm
 
 ```
 module.prop                        id 固定，换分辨率重装是更新
-customize.sh                       分辨率对不上时提示
+customize.sh                       检查 metamodule（缺了直接中断安装）+ 分辨率提示
 post-fs-data.sh                    按配置设开机音属性、铺 MIUI 主题音源
 uninstall.sh                       还原属性 + 删掉铺过去的音效
 webroot/                           WebUI 产物（配置页，来自 webui/dist/）
