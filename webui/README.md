@@ -18,15 +18,15 @@ VS Code 里可以 `Ctrl+Shift+P` → **Simple Browser: Show** 打开该地址，
 ```bash
 cd webui
 npm install
-npm run build     # 产物输出到 ../webroot，由 src/build.py 打进模块
+npm run build     # 产物输出到 webui/dist/，由 src/build.py 打进模块的 webroot/
 ```
 
-`vite.config.ts` 里写死了 `outDir: '../webroot'` 和 `base: './'`——后者不能改，管理器是用
+`vite.config.ts` 里写死了 `outDir: 'dist'` 和 `base: './'`——后者不能改，管理器是用
 WebView 从本地加载页面，绝对路径会 404。
 
 ## 约定
 
-- 产物目录 `webroot/` 要提交进仓库，打包脚本只读它，不跑 npm；
+- 产物目录 `dist/` 不入库：GitHub Actions 会先 `npm ci && npm run build` 再打模块，本地打包前手动构建一次；
 - 模块 id 用 `__ID__` 占位，`build.py` 打包时替换成真实 id（当前为 `genshin_bootanim`）；
 - 执行命令用官方桥接库：
 

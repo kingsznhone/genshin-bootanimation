@@ -43,10 +43,12 @@ module.prop                        id 固定，换分辨率重装是更新
 customize.sh                       分辨率对不上时提示
 post-fs-data.sh                    按配置设开机音属性、铺 MIUI 主题音源
 uninstall.sh                       还原属性 + 删掉铺过去的音效
-webroot/                           WebUI 产物（配置页）
+webroot/                           WebUI 产物（配置页，来自 webui/dist/）
 system/media/bootanimation.zip     desc.txt + partN + audio.wav（AOSP 用）
 files/bootaudio.mp3                MIUI 的开机音源
 ```
+
+三个 `.sh` 的源码在 `src/ksu-scripts/`，打包时替换 `__ID__` / `__SIZE__` / `__MD5__` 占位符。
 
 只写 `/system/media`，不要往模块里加 `product/`——会让整块模块挂不上。
 
@@ -63,12 +65,14 @@ files/bootaudio.mp3                MIUI 的开机音源
 
 ## WebUI
 
-`webui/` 是配置页源码（React + TypeScript + MUI + Vite），`webroot/` 是构建产物；
-`src/build.py` 只负责把 `webroot/` 整个目录打进模块，不跑 npm。
+`webui/` 是配置页源码（React + TypeScript + MUI + Vite），构建产物在 `webui/dist/`（不入库）；
+`src/build.py` 把 `webui/dist/` 整个目录打进模块的 `webroot/`，自己不跑 npm。
+GitHub Actions 会先构建 WebUI 再打模块；本地需要先手动构建一次：
 
-``ash
-cd webui && npm install && npm run build   # 产物直接输出到 webroot/
-``
+```bash
+cd webui && npm ci && npm run build   # 产物输出到 webui/dist/
+```
+
 ## 版本号
 
 改 `pyproject.toml` 的 `version`，`versionCode` 自动推导（`1.0.1` → `10001`）。

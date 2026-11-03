@@ -6,6 +6,8 @@
 
 把 `assets/frames/`（1440x3200 母版帧，画面在画布里是横置的）按目标分辨率打成
 KernelSU 模块。唯一脚本 `src/build.py`，产物 `build/genshin-bootamin.zip`。
+模块里的 shell 脚本（customize / post-fs-data / uninstall）在 `src/ksu-scripts/`，
+`__ID__` / `__SIZE__` / `__MD5__` 占位符由 `build.py` 打包时替换。
 
 ## 硬性规则
 
@@ -61,13 +63,13 @@ uv run src/build.py 1080x2400
 uv run src/build.py 2656x1220 --fps 24     # 降帧率
 ```
 
-WebUI 源码在 `webui/`（React + TS + MUI + Vite），产物在 `webroot/`：
+WebUI 源码在 `webui/`（React + TS + MUI + Vite），产物在 `webui/dist/`（不入库）：
 
 ```bash
-cd webui && pnpm install && pnpm build     # 输出直接覆盖 ../webroot
+cd webui && npm ci && npm run build     # 输出到 webui/dist/
 ```
 
-`build.py` 只负责把 `webroot/` 整个目录打进模块，不跑 npm。
+`build.py` 把 `webui/dist/` 整个目录打进模块的 `webroot/`，不跑 npm；CI 里先构建 WebUI 再跑 `build.py`。
 
 素材是 1440x3200（9:20 竖构图），目标宽高比偏离越多裁得越多，这是预期行为，不要"修正"。
 

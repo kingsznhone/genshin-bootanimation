@@ -33,7 +33,8 @@ MASTER_FPS = 30  # 母版帧率
 MASTER_SIZE = (1440, 3200)  # 母版分辨率，不传 size 时用它
 MODULE_ID = "genshin_bootanim"
 MODULE_AUTHOR = "ZNH"
-WEBUI = ROOT / "webroot"  # 前端产物目录，由 webui/ 构建而来
+WEBUI = ROOT / "webui" / "dist"  # 前端产物目录（cd webui && npm run build），打进模块的 webroot/
+SCRIPTS = ROOT / "src" / "ksu-scripts"  # 模块 shell 脚本模板，__KEY__ 占位符打包时替换
 PNG_LEVEL = 9  # zlib 最高压缩
 GRAY_LEVELS = 64  # 灰度级数，越小帧越小
 _GRAY_STEP = 256 // GRAY_LEVELS
@@ -50,60 +51,14 @@ VERSION_CODE = max(
     1, sum(int(n) * 100 ** (2 - i) for i, n in enumerate(re.findall(r"\d+", VERSION)[:3]))
 )
 
-CUSTOMIZE = """#!/system/bin/sh
-ui_print "- 原神开机动画"
-ui_print "- 重启后生效"
 
-if command -v wm >/dev/null 2>&1; then
-    REAL="$(wm size 2>/dev/null | tail -n 1 | sed 's/.*: *//')"
-    if [ -n "$REAL" ] && [ "$REAL" != "__SIZE__" ]; then
-        ui_print "! 当前设备 $REAL，与本模块 __SIZE__ 不一致，画面会被裁切或留边"
-    fi
-fi
-"""
+def _script(name: str, **subs: str) -> bytes:
+    """读 src/ksu-scripts/ 里的模板，替换 __KEY__ 占位符；强制 LF，设备上的 sh 不认 CRLF。"""
+    text = (SCRIPTS / name).read_text(encoding="utf-8").replace("\r\n", "\n")
+    for key, value in subs.items():
+        text = text.replace(f"__{key}__", value)
+    return text.encode()
 
-# 开机音总开关：AOSP 的 audioplay 看 persist.sys.bootanim.play_sound，
-# MIUI 的 playBackgroundMusic 看 persist.sys.boot_audio.enabled。
-# 两者都是 persist 属性，卸载时要在 uninstall.sh 里还原。
-# KSU 执行 post-fs-data.sh 时不设 $MODPATH，路径必须写死。
-POST_FS_DATA = """#!/system/bin/sh
-MODDIR=/data/adb/modules/__ID__
-CONF=/data/adb/genshin_bootanim/config.conf
-DST=/data/system/theme/boots/bootaudio.mp3
-SRC="$MODDIR/files/bootaudio.mp3"
-
-MUTE=0
-if [ -f "$CONF" ] && grep -q '^SILENT=1$' "$CONF"; then
-    MUTE=1
-fi
-
-if [ "$MUTE" = "1" ]; then
-    setprop persist.sys.bootanim.play_sound 0
-    setprop persist.sys.boot_audio.enabled 0
-else
-    setprop persist.sys.bootanim.play_sound 1
-    setprop persist.sys.boot_audio.enabled 1
-    if [ -f "$SRC" ]; then
-        mkdir -p "${DST%/*}"
-        cp -f "$SRC" "$DST"
-        chmod 644 "$DST"
-        chown 0:0 "$DST" 2>/dev/null
-        restorecon "$DST" 2>/dev/null
-    fi
-fi
-"""
-
-UNINSTALL = """#!/system/bin/sh
-# 模块没了就别继续压着系统开关
-setprop persist.sys.bootanim.play_sound 1
-setprop persist.sys.boot_audio.enabled 1
-
-# 只删我们自己放过去的那份，别误删用户的主题铃声
-DST=/data/system/theme/boots/bootaudio.mp3
-if [ -f "$DST" ] && [ "$(md5sum "$DST" 2>/dev/null | cut -d' ' -f1)" = "__MD5__" ]; then
-    rm -f "$DST"
-fi
-"""
 
 
 class BuildError(RuntimeError):
@@ -163,9 +118,9 @@ TEXT_SUFFIXES = {".html", ".js", ".mjs", ".css", ".json", ".svg", ".map", ".txt"
 
 
 def _write_webui(zf: zipfile.ZipFile, compress: int) -> None:
-    """把 webroot/ 整个目录打进去（前端产物由使用者自己 build）。"""
+    """把 webui/dist/ 整个目录打进模块的 webroot/（前端产物需先 npm run build）。"""
     if not WEBUI.is_dir():
-        raise BuildError(f"缺少前端产物目录：{WEBUI}（先构建 WebUI，或删掉 webroot 相关配置）")
+        raise BuildError(f"缺少前端产物目录：{WEBUI}（先执行 cd webui && npm ci && npm run build）")
     index = WEBUI / "index.html"
     if not index.is_file():
         raise BuildError(f"{index} 不存在，WebUI 入口缺失")
@@ -173,7 +128,7 @@ def _write_webui(zf: zipfile.ZipFile, compress: int) -> None:
     for path in sorted(WEBUI.rglob("*")):
         if not path.is_file():
             continue
-        arc = path.relative_to(ROOT).as_posix()  # webroot/...
+        arc = "webroot/" + path.relative_to(WEBUI).as_posix()
         data = path.read_bytes()
         if path.suffix.lower() in TEXT_SUFFIXES:
             data = data.decode("utf-8").replace("__ID__", MODULE_ID).encode()
@@ -239,10 +194,9 @@ def write_module(width: int, height: int, inner: Path, out_path: Path, fps: int)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out_path, "w", compression=method, compresslevel=9) as zf:
         _write(zf, "module.prop", module_prop.encode(), method)
-        _write(zf, "customize.sh", CUSTOMIZE.replace("__SIZE__", size).encode(), method, 0o755)
-        _write(zf, "post-fs-data.sh", POST_FS_DATA.replace("__ID__", MODULE_ID).encode(), method, 0o755)
-        uninstall = UNINSTALL.replace("__MD5__", md5)
-        _write(zf, "uninstall.sh", uninstall.encode(), method, 0o755)
+        _write(zf, "customize.sh", _script("customize.sh", SIZE=size), method, 0o755)
+        _write(zf, "post-fs-data.sh", _script("post-fs-data.sh", ID=MODULE_ID), method, 0o755)
+        _write(zf, "uninstall.sh", _script("uninstall.sh", MD5=md5), method, 0o755)
         _write_webui(zf, method)
         _write(zf, "system/media/bootanimation.zip", inner.read_bytes(), method)
         _write(zf, "files/bootaudio.mp3", mp3, method)
