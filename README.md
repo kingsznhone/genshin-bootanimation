@@ -73,7 +73,3 @@ cd webui && npm install && npm run build   # 产物直接输出到 webroot/
 
 改 `pyproject.toml` 的 `version`，`versionCode` 自动推导（`1.0.1` → `10001`）。
 
-## 已知问题
-
-HyperOS 4 上如果手机里文件极多（百万级），开机时 SELinux 全盘重打标签会拖慢启动，
-音频服务来不及就绪，表现为动画正常但没有声音。清理文件可以缓解。
