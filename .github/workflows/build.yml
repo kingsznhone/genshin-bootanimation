@@ -11,10 +11,6 @@ on:
         description: "帧率（1–30，母版是 30）"
         required: false
         default: "30"
-      silent:
-        description: "不带音频"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -41,14 +37,9 @@ jobs:
         env:
           RESOLUTION: ${{ inputs.resolution }}
           FPS: ${{ inputs.fps }}
-          SILENT: ${{ inputs.silent }}
         run: |
-          args="$RESOLUTION --fps $FPS -o build/genshin-bootamin.zip"
-          if [ "$SILENT" = "true" ]; then
-            args="$args --silent"
-          fi
           uv sync --frozen
-          uv run python src/build.py $args
+          uv run python src/build.py "$RESOLUTION" --fps "$FPS" -o build/genshin-bootamin.zip
 
       - name: Upload
         uses: actions/upload-artifact@v7

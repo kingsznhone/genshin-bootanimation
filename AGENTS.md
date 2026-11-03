@@ -5,7 +5,7 @@
 ## 这个仓库做什么
 
 把 `assets/frames/`（1440x3200 母版帧，画面在画布里是横置的）按目标分辨率打成
-KernelSU / Magisk 模块。唯一脚本 `src/build.py`，产物 `build/genshin-bootamin.zip`。
+KernelSU 模块。唯一脚本 `src/build.py`，产物 `build/genshin-bootamin.zip`。
 
 ## 硬性规则
 
@@ -30,27 +30,48 @@ KernelSU / Magisk 模块。唯一脚本 `src/build.py`，产物 `build/genshin-b
 5. **一次只改一个变量。**
    之前同时改了布局、颜色类型、量化级数，结果三次失败无法归因，浪费了一轮。
 
-6. **开机音效有两个落点，别只放一个。**
-   OS3 及更早读 `system/media/bootaudio.mp3`（模块静态文件）；HyperOS 4 只认 MIUI 主题通道
-   `/data/system/theme/boots/bootaudio.mp3`，由 `post-fs-data.sh` 开机时铺、`uninstall.sh` md5 比对后删。
-   静态部分仍然只写 `system/media/`，不要为了音效去加 `product/`。
+6. **开机音：属性当总开关，文件只当音源。**
+   `post-fs-data.sh` 每次开机按 `/data/adb/genshin_bootanim/config.conf` 的 `SILENT` 设置：
+   `SILENT=1` → `persist.sys.bootanim.play_sound=0`、`persist.sys.boot_audio.enabled=0`；
+   否则两个都设成 `1`，并把 `files/bootaudio.mp3` 复制到 `/data/system/theme/boots/bootaudio.mp3`。
+   `uninstall.sh` 必须把两个属性还原成 `1`，否则模块卸载后手机永远没开机音。
+   **不要**把 mp3 放进 `system/media/`：`/system/media` 是 `/product/media` 的软链，
+   那份会成为 MIUI 的回落路径，绕开属性开关（实测）。
+   内层 `bootanimation.zip` 要保留 `part0/audio.wav` 供 AOSP 的 audioplay；静音已经由属性负责，
+   不需要为了静音把它删掉。
 
 7. **模块 zip 用 deflate 9，绝对不要用 LZMA。**
    LZMA 能再小 2%（8.13 MiB），但 ksud 解不开，实测报 `unzip: corrupted data / inflate error`，
    装机直接失败。deflate 9 是验证过能装的（8.32 MiB，比 stored 小 10%）。
    内层 `bootanimation.zip` 的帧必须继续保持 STORED，那是 Android 的硬性要求。
 
+8. **只支持 KernelSU，不支持 Magisk。**
+   不要加 `META-INF/com/google/android/update-binary` / `updater-script`，不要为 Magisk 改脚本路径
+   或挂载方式，文档里也不要写"KernelSU / Magisk"。所有行为只在 KSU 上验证过。
+
+9. **构建不带静音参数。**
+   音效永远打进包里，静音是运行时开关（`config.conf` 的 `SILENT`）。
+   不要再加 `--silent` 之类的构建选项。
+
 ## 构建
 
 ```bash
-uv run python src/build.py 1080x2400              # 默认 30fps
-uv run python src/build.py 2656x1220 --fps 24     # 降帧率
-uv run python src/build.py 1080x2400 --silent     # 不带音频
+uv run src/build.py                        # 不传分辨率 = 母版 1440x3200，默认 30fps
+uv run src/build.py 1080x2400
+uv run src/build.py 2656x1220 --fps 24     # 降帧率
 ```
+
+WebUI 源码在 `webui/`（React + TS + MUI + Vite），产物在 `webroot/`：
+
+```bash
+cd webui && pnpm install && pnpm build     # 输出直接覆盖 ../webroot
+```
+
+`build.py` 只负责把 `webroot/` 整个目录打进模块，不跑 npm。
 
 素材是 1440x3200（9:20 竖构图），目标宽高比偏离越多裁得越多，这是预期行为，不要"修正"。
 
-发布用的母版包：`uv run python src/build.py 1440x3200 -o build/genshin_bootanim-<code>-<version>.zip`
+发布用的母版包：`uv run src/build.py 1440x3200 -o build/genshin_bootanim-<code>-<version>.zip`
 
 ## 实测事实（别再重新踩）
 
@@ -63,6 +84,10 @@ uv run python src/build.py 1080x2400 --silent     # 不带音频
   bootanimation 能读到，实测有效。
 - 模块**带了**静态 `system/media/bootanimation.zip` 时，KSU 会在模块挂载阶段（脚本之后）
   再挂一次，压住脚本 bind 的那层——想动态替换就不要带静态文件。
+- MIUI 的 `playBackgroundMusic` 有回落：主题目录没有文件时会播 `/product/media/bootaudio.mp3`，
+  所以模块里不能再放这份 mp3。
+- `persist.sys.bootanim.play_sound` / `persist.sys.boot_audio.enabled` 是开机音总开关，
+  实测两个都设 0 后，即使主题目录里有 mp3 也不响；ksu 域 setprop 可写（rc=0），值持久化。
 - bind 只对本次开机有效。
 
 ## 测试机

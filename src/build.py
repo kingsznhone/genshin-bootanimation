@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""把 assets/ 里的母版按目标分辨率打成 KernelSU / Magisk 模块。
+"""把 assets/ 里的母版按目标分辨率打成 KernelSU 模块（不支持 Magisk）。
 
-    uv run python src/build.py 1440x3200
+    uv run python src/build.py                     # 不传分辨率就是母版 1440x3200
     uv run python src/build.py 1080x2400 -o build/1080p.zip
-    uv run python src/build.py 1440x3200 --silent
+    uv run python src/build.py --fps 24
 
 母版: assets/frames/IMG000.png ...
-音频: assets/audio/audio.wav、bootaudio.mp3（--silent 时不带）
+音频: assets/audio/bootaudio.mp3（静音由 WebUI 开关控制，构建时总是带上）
 产物: build/genshin-bootamin.zip
 """
 
@@ -25,13 +25,15 @@ from PIL import Image, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
 FRAMES = ROOT / "assets" / "frames"
-AUDIO_WAV = ROOT / "assets" / "audio" / "audio.wav"
+AUDIO_WAV = ROOT / "assets" / "audio" / "audio.wav"  # AOSP audioplay 从 zip 里读
 AUDIO_MP3 = ROOT / "assets" / "audio" / "bootaudio.mp3"
 OUT = ROOT / "build"
 
 MASTER_FPS = 30  # 母版帧率
+MASTER_SIZE = (1440, 3200)  # 母版分辨率，不传 size 时用它
 MODULE_ID = "genshin_bootanim"
 MODULE_AUTHOR = "ZNH"
+WEBUI = ROOT / "webroot"  # 前端产物目录，由 webui/ 构建而来
 PNG_LEVEL = 9  # zlib 最高压缩
 GRAY_LEVELS = 64  # 灰度级数，越小帧越小
 _GRAY_STEP = 256 // GRAY_LEVELS
@@ -60,39 +62,48 @@ if command -v wm >/dev/null 2>&1; then
 fi
 """
 
-# HyperOS 4 的开机铃声走 MIUI 主题通道，只认 /data/system/theme/boots/bootaudio.mp3，
-# system/media 下那份会被忽略；OS3 及更早则读 system/media。
+# 开机音总开关：AOSP 的 audioplay 看 persist.sys.bootanim.play_sound，
+# MIUI 的 playBackgroundMusic 看 persist.sys.boot_audio.enabled。
+# 两者都是 persist 属性，卸载时要在 uninstall.sh 里还原。
 # KSU 执行 post-fs-data.sh 时不设 $MODPATH，路径必须写死。
 POST_FS_DATA = """#!/system/bin/sh
 MODDIR=/data/adb/modules/__ID__
+CONF=/data/adb/genshin_bootanim/config.conf
 DST=/data/system/theme/boots/bootaudio.mp3
-SRC="$MODDIR/system/media/bootaudio.mp3"
-__ACTION__
+SRC="$MODDIR/files/bootaudio.mp3"
+
+MUTE=0
+if [ -f "$CONF" ] && grep -q '^SILENT=1$' "$CONF"; then
+    MUTE=1
+fi
+
+if [ "$MUTE" = "1" ]; then
+    setprop persist.sys.bootanim.play_sound 0
+    setprop persist.sys.boot_audio.enabled 0
+else
+    setprop persist.sys.bootanim.play_sound 1
+    setprop persist.sys.boot_audio.enabled 1
+    if [ -f "$SRC" ]; then
+        mkdir -p "${DST%/*}"
+        cp -f "$SRC" "$DST"
+        chmod 644 "$DST"
+        chown 0:0 "$DST" 2>/dev/null
+        restorecon "$DST" 2>/dev/null
+    fi
+fi
 """
 
-THEME_AUDIO_MD5 = "__MD5__"
-
 UNINSTALL = """#!/system/bin/sh
+# 模块没了就别继续压着系统开关
+setprop persist.sys.bootanim.play_sound 1
+setprop persist.sys.boot_audio.enabled 1
+
 # 只删我们自己放过去的那份，别误删用户的主题铃声
 DST=/data/system/theme/boots/bootaudio.mp3
 if [ -f "$DST" ] && [ "$(md5sum "$DST" 2>/dev/null | cut -d' ' -f1)" = "__MD5__" ]; then
     rm -f "$DST"
 fi
 """
-
-# 非静音：把音效铺到主题目录，OS4 才会在开机时播
-POST_FS_DATA_COPY = """if [ -f "$SRC" ]; then
-    mkdir -p "${DST%/*}"
-    cp -f "$SRC" "$DST"
-    chmod 644 "$DST"
-    chown 0:0 "$DST" 2>/dev/null
-    restorecon "$DST" 2>/dev/null
-fi"""
-
-# 静音：如果之前铺过我们的文件就删掉，避免装过非静音版后一直有声
-POST_FS_DATA_SILENT = """if [ -f "$DST" ] && [ "$(md5sum "$DST" 2>/dev/null | cut -d' ' -f1)" = "__MD5__" ]; then
-    rm -f "$DST"
-fi"""
 
 
 class BuildError(RuntimeError):
@@ -147,6 +158,28 @@ def _write(
     zf.writestr(info, data)
 
 
+# 前端产物里可能有 __ID__ 占位符，这几类文件按文本处理
+TEXT_SUFFIXES = {".html", ".js", ".mjs", ".css", ".json", ".svg", ".map", ".txt"}
+
+
+def _write_webui(zf: zipfile.ZipFile, compress: int) -> None:
+    """把 webroot/ 整个目录打进去（前端产物由使用者自己 build）。"""
+    if not WEBUI.is_dir():
+        raise BuildError(f"缺少前端产物目录：{WEBUI}（先构建 WebUI，或删掉 webroot 相关配置）")
+    index = WEBUI / "index.html"
+    if not index.is_file():
+        raise BuildError(f"{index} 不存在，WebUI 入口缺失")
+
+    for path in sorted(WEBUI.rglob("*")):
+        if not path.is_file():
+            continue
+        arc = path.relative_to(ROOT).as_posix()  # webroot/...
+        data = path.read_bytes()
+        if path.suffix.lower() in TEXT_SUFFIXES:
+            data = data.decode("utf-8").replace("__ID__", MODULE_ID).encode()
+        _write(zf, arc, data, compress)
+
+
 def group_frames(frames: list[Path]) -> list[tuple[list[Path], int]]:
     """把连续的相同帧压成 (帧列表, 重复次数)。count>1 的 part 只存 1 帧。"""
     hashes = [hashlib.md5(f.read_bytes()).digest() for f in frames]
@@ -170,7 +203,9 @@ def group_frames(frames: list[Path]) -> list[tuple[list[Path], int]]:
     return parts
 
 
-def write_bootanimation(width, height, parts, zip_path, silent, fps):
+def write_bootanimation(
+    width: int, height: int, parts: list[tuple[list[Path], int]], zip_path: Path, fps: int
+) -> None:
     desc = [f"{width} {height} {fps}"]
     desc += [f"c {count} 0 part{i}" for i, (_, count) in enumerate(parts)]
 
@@ -179,13 +214,14 @@ def write_bootanimation(width, height, parts, zip_path, silent, fps):
         for i, (frames, _) in enumerate(parts):
             for j, frame in enumerate(frames):
                 _write(zf, f"part{i}/f{j:04d}.png", frame.read_bytes())
-        if not silent and AUDIO_WAV.exists():
+        # AOSP 的 audioplay 只吃 zip 里的 audio.wav；静音由 persist 属性控制
+        if AUDIO_WAV.exists():
             _write(zf, "part0/audio.wav", AUDIO_WAV.read_bytes())
 
 
-def write_module(width, height, inner, out_path, silent, fps):
+def write_module(width: int, height: int, inner: Path, out_path: Path, fps: int) -> None:
     size = f"{width}x{height}"
-    tags = f"[{fps}FPS]" + ("[静音]" if silent else "")
+    tags = f"[{fps}FPS]"
     module_prop = (
         f"id={MODULE_ID}\n"
         f"name=原神开机动画 {tags}\n"
@@ -199,23 +235,17 @@ def write_module(width, height, inner, out_path, silent, fps):
     method = zipfile.ZIP_DEFLATED
     mp3 = AUDIO_MP3.read_bytes()
     md5 = hashlib.md5(mp3).hexdigest()
-    action = POST_FS_DATA_SILENT if silent else POST_FS_DATA_COPY
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out_path, "w", compression=method, compresslevel=9) as zf:
         _write(zf, "module.prop", module_prop.encode(), method)
         _write(zf, "customize.sh", CUSTOMIZE.replace("__SIZE__", size).encode(), method, 0o755)
-        post = (
-            POST_FS_DATA.replace("__ID__", MODULE_ID)
-            .replace("__ACTION__", action)
-            .replace(THEME_AUDIO_MD5, md5)
-        )
-        _write(zf, "post-fs-data.sh", post.encode(), method, 0o755)
-        uninstall = UNINSTALL.replace(THEME_AUDIO_MD5, md5)
+        _write(zf, "post-fs-data.sh", POST_FS_DATA.replace("__ID__", MODULE_ID).encode(), method, 0o755)
+        uninstall = UNINSTALL.replace("__MD5__", md5)
         _write(zf, "uninstall.sh", uninstall.encode(), method, 0o755)
+        _write_webui(zf, method)
         _write(zf, "system/media/bootanimation.zip", inner.read_bytes(), method)
-        if not silent:
-            _write(zf, "system/media/bootaudio.mp3", mp3, method)
+        _write(zf, "files/bootaudio.mp3", mp3, method)
 
 
 # --------------------------------------------------------------------------- #
@@ -229,7 +259,7 @@ def resample(frames: list[Path], fps: int) -> list[Path]:
     return [frames[min(len(frames) - 1, round(i * MASTER_FPS / fps))] for i in range(count)]
 
 
-def build(width: int, height: int, out_path: Path, keep_frames: bool, silent: bool, fps: int) -> Path:
+def build(width: int, height: int, out_path: Path, keep_frames: bool, fps: int) -> Path:
     frames = resample(sorted(FRAMES.glob("IMG*.png")), fps)
     if not frames:
         raise BuildError(f"找不到母版帧：{FRAMES}")
@@ -241,8 +271,8 @@ def build(width: int, height: int, out_path: Path, keep_frames: bool, silent: bo
         raise BuildError("重复帧分组后的总帧数与母版不一致")
 
     inner = work / "bootanimation.zip"
-    write_bootanimation(width, height, parts, inner, silent, fps)
-    write_module(width, height, inner, out_path, silent, fps)
+    write_bootanimation(width, height, parts, inner, fps)
+    write_module(width, height, inner, out_path, fps)
 
     if not keep_frames:
         shutil.rmtree(work, ignore_errors=True)
@@ -254,19 +284,21 @@ def build(width: int, height: int, out_path: Path, keep_frames: bool, silent: bo
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="build.py", description="按目标分辨率打包 KSU/Magisk 模块")
-    parser.add_argument("size", help="目标分辨率，如 1440x3200")
+    parser = argparse.ArgumentParser(prog="build.py", description="按目标分辨率打包 KernelSU 模块")
+    parser.add_argument(
+        "size", nargs="?", help=f"目标分辨率，默认母版 {MASTER_SIZE[0]}x{MASTER_SIZE[1]}"
+    )
     parser.add_argument("-o", "--out", help="输出模块路径，默认 build/genshin-bootamin.zip")
     parser.add_argument("--fps", type=int, default=MASTER_FPS, help=f"输出帧率 1–{MASTER_FPS}，默认 {MASTER_FPS}")
     parser.add_argument("--keep-frames", action="store_true", help="保留 build/.work 里的中间帧")
-    parser.add_argument("--silent", action="store_true", help="不带音频")
     args = parser.parse_args(argv)
 
     try:
         if not 1 <= args.fps <= MASTER_FPS:
             raise BuildError(f"帧率只能是 1–{MASTER_FPS}（母版就是 {MASTER_FPS}fps，不做上采样）")
+        width, height = parse_size(args.size) if args.size else MASTER_SIZE
         out = Path(args.out) if args.out else Path("build") / "genshin-bootamin.zip"
-        build(*parse_size(args.size), Path.cwd() / out, args.keep_frames, args.silent, args.fps)
+        build(width, height, Path.cwd() / out, args.keep_frames, args.fps)
     except BuildError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
