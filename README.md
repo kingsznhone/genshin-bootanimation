@@ -24,7 +24,7 @@ KernelSU 3.x 起自己不做挂载，模块的 `system/` 要靠 metamodule 挂�
 重启后确认挂上了没有：`stat -c %s /system/media/bootanimation.zip`，大小应该和
 `/data/adb/modules/genshin_bootanim/system/media/bootanimation.zip` 一致。
 
-## 用法
+## 生成自定义分辨率帧率模块
 
 ```bash
 uv sync
